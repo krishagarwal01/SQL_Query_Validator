@@ -27,4 +27,5 @@
 
 [ \t\n]+    ;   // ignore whitespace
 .           { printf("Invalid token: %s\n", yytext); }
-%%v
+%%
+
