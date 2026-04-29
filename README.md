@@ -20,4 +20,3 @@ lex sql.l
 yacc -d sql.y
 gcc lex.yy.c y.tab.c -o sql_validator
 ./sql_validator
-hi wassup
