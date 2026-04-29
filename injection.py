@@ -30,7 +30,9 @@ _PATTERNS: list[tuple[str, str, RiskLevel, str | None]] = [
     (r"(?i)\bSLEEP\s*\(|\bBENCHMARK\s*\(|\bWAITFOR\s+DELAY\b", "Time-based blind SQL patterns", RiskLevel.HIGH, None),
     (r"(?i)INTO\s+OUTFILE|LOAD_FILE\s*\(", "File read / write patterns", RiskLevel.HIGH, None),
     (r"(?i)/\*.*?\*/", "Block comment (often used to bypass filters)", RiskLevel.MEDIUM, None),
-    (r"(?i)--\s*[^\n]+|\#[^\n]*", "Line comment in expression (often to truncate server-side query)", RiskLevel.MEDIUM, None),
+    (r"(?i)--\s*[^
+]+|\#[^
+]*", "Line comment in expression (often to truncate server-side query)", RiskLevel.MEDIUM, None),
     (r"(?i)\bINFORMATION_SCHEMA\b|\bSYS\.\b|\bpg_catalog\b", "Metadata catalog access", RiskLevel.MEDIUM, None),
     (r"(?i)\bCHAR\s*\(\s*\d", "CHAR() concatenation (obfuscation)", RiskLevel.MEDIUM, None),
     (r"(?i)CONCAT\s*\(|0x[0-9a-fA-F]+", "String concatenation / hex literals", RiskLevel.LOW, None),
@@ -40,7 +42,18 @@ _PATTERNS: list[tuple[str, str, RiskLevel, str | None]] = [
 def analyze_injection(text: str) -> dict:
     """
     Scan raw SQL for common injection-style patterns.
-    Returns: { "level": str, "level_num": int, "findings": [ { "pattern", "message", "risk", "snippet" } ] }
+    
+    This function analyzes SQL queries for potential injection vulnerabilities
+    using regex-based pattern matching.
+    
+    Args:
+        text (str): The SQL query string to analyze.
+    
+    Returns:
+        dict: A dictionary containing:
+            - "level" (str): Risk level as string (low, medium, high, critical)
+            - "level_num" (int): Risk level as integer
+            - "findings" (list): List of detected patterns with details
     """
     if not text or not str(text).strip():
         return {
