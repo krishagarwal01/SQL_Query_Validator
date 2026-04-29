@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Query Validator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+{%- macro draw_tree(n) -%}
+  <li>
+    <span class="pt-label">{{ n['label'] }}</span>
+    {%- if n.get('children') -%}
+    <ul>
+      {%- for c in n['children'] -%}
+        {{ draw_tree(c) }}
+      {%- endfor -%}
+    </ul>
+    {%- endif -%}
+  </li>
+{%- endmacro -%}
+
+    <div class="page-wrapper">
+        <header class="top-header">
+            <div>
+                <h1>🧠 SQL Query Validator</h1>
+                <p class="subtitle">
+                    Lexical, syntax, and semantic analysis — injection heuristics, multi-statement, parse tree, and SQLite
+                </p>
+            </div>
+        </header>
+
+        <div class="main-layout">
+
+            <div class="left-panel">
+
+                <div class="card input-card">
+                    <h2>🧾 Query Editor</h2>
+
+                    <form method="POST" id="queryForm">
+                        <label for="query">Enter SQL (use <code>;</code> to separate multiple statements; strings can span text)</label>
+                        <textarea
+                            name="query"
+                            id="query"
+                            rows="10"
+                            placeholder="Example:
+SELECT name, age FROM students WHERE age > 20;
+INSERT INTO students VALUES (3, 'Carol', 19, 1);
+UPDATE students SET age = 22 WHERE name = 'Alice'
+DELETE FROM students WHERE id = 2"
+                        >{{ current_query }}</textarea>
+
+                        <div class="options-row">
+                            <label class="check-label">
+                                <input type="checkbox" name="run_db" value="1" {% if run_db %}checked{% endif %}>
+                                Run against integrated SQLite (validated AST only)
+                            </label>
+                        </div>
+
+                        <div class="btn-box">
+                            <button type="submit" class="primary-btn">✅ Validate &amp; analyze</button>
+                            <button type="button" class="secondary-btn" onclick="clearEditor()">🧹 Clear</button>
+                        </div>
+
+                        <div id="loadingBox" class="loading-box">
+                            <span class="spinner"></span>
+                            <span>Processing query...</span>
+                        </div>
+                    </form>
+                </div>
+
+                {% if injection_report and injection_report.findings %}
+                <div class="card injection-card risk-{{ injection_report.level }}">
+                    <h2>🛡 SQL injection heuristics</h2>
+                    <p class="injection-level">Overall risk: <strong>{{ injection_report.level }}</strong></p>
+                    <p class="injection-hint">Patterns are scored for learning; use bound parameters in production.</p>
+                    <ul class="injection-list">
+                        {% for f in injection_report.findings %}
+                        <li>
+                            <span class="inj-risk inj-{{ f.risk }}">{{ f.risk }}</span>
+                            <span class="inj-msg">{{ f.message }}</span>
+                            {% if f.snippet %}
+                            <code class="inj-snippet">{{ f.snippet }}</code>
+                            {% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% elif injection_report and not injection_report.findings %}
+                <div class="card injection-card risk-low">
+                    <h2>🛡 SQL injection heuristics</h2>
+                    <p class="injection-level">No common high-risk patterns detected in this pass.</p>
+                </div>
+                {% endif %}
+
+                {% if result %}
+                    <div class="card result-card {% if 'Error' in result %}error-card{% elif 'valid' in result.lower() %}success-card{% else %}warning-card{% endif %}">
+                        <h2>📌 Validation result</h2>
+                        <p>{{ result }}</p>
+                    </div>
+                {% endif %}
+
+                {% if statements and run_db %}
+                <div class="card results-summary-card">
+                    <h2>📊 Query results (summary)</h2>
+                    <p class="results-summary-hint">What ran on SQLite for each statement (when validation passed).</p>
+                    <ol class="results-summary-list">
+                        {% for st in statements %}
+                        <li>
+                            <span class="rs-label">Statement {{ st.index }}</span>
+                            {% if not st.valid %}
+                            <span class="rs-note">— not executed (validation failed).</span>
+                            {% elif not st.db %}
+                            <span class="rs-note">— DB run skipped.</span>
+                            {% elif st.db.ok %}
+                                {% if st.db.type == 'SELECT' %}
+                                <span class="rs-ok"><strong>{{ st.db.rows|length }} row(s)</strong> returned.</span>
+                                {% else %}
+                                <span class="rs-ok"><strong>{{ st.db.message | default('OK') }}</strong></span>
+                                {% endif %}
+                            {% else %}
+                            <span class="rs-err">— error: {{ st.db.error }}</span>
+                            {% endif %}
+                        </li>
+                        {% endfor %}
+                    </ol>
+                </div>
+                {% endif %}
+
+                {% if suggestion %}
+                    <div class="card suggestion-card">
+                        <h2>⚠ Suggestion</h2>
+                        <p>{{ suggestion }}</p>
+                    </div>
+                {% endif %}
+
+                {% if highlighted_query %}
+                    <div class="card highlight-card">
+                        <h2>❌ Error highlight (first failing statement)</h2>
+                        <pre>{{ highlighted_query }}</pre>
+                    </div>
+                {% endif %}
+
+                {% if statements %}
+                {% for st in statements %}
+                <div class="card statement-block {% if st.valid %}success-card{% else %}error-card{% endif %}">
+                    <h2>📎 Statement {{ st.index }}{% if st.valid %} — OK{% else %} — failed{% endif %}</h2>
+                    <pre class="stmt-text">{{ st.text }}</pre>
+
+                    {% if run_db and st.valid and st.db %}
+                    <div class="query-result-panel">
+                        <h3 class="query-result-title">Query result</h3>
+                        {% if st.db.executed_display %}
+                        <p class="exec-label">Executed SQL</p>
+                        <pre class="exec-sql">{{ st.db.executed_display }}</pre>
+                        {% endif %}
+                        {% if st.db.ok %}
+                            {% if st.db.type == 'SELECT' %}
+                            <p class="row-count-badge">{{ st.db.rows|length }} row(s)</p>
+                            {% if st.db.columns %}
+                            <div class="table-wrapper result-table-wrap">
+                                <table class="result-table">
+                                    <tr>
+                                        {% for c in st.db.columns %}
+                                        <th>{{ c }}</th>
+                                        {% endfor %}
+                                    </tr>
+                                    {% for row in st.db.rows %}
+                                    <tr>
+                                        {% for cell in row %}
+                                        <td>{{ cell }}</td>
+                                        {% endfor %}
+                                    </tr>
+                                    {% endfor %}
+                                </table>
+                            </div>
+                            {% endif %}
+                            {% if st.db.columns and st.db.rows|length == 0 %}
+                            <p class="empty-result">No rows returned.</p>
+                            {% endif %}
+                            {% else %}
+                            <p class="db-msg success dml-result">{{ st.db.message | default('OK') }} <span class="rowcount">(rows affected: {{ st.db.rowcount | default('—') }})</span></p>
+                            {% endif %}
+                        {% else %}
+                        <p class="db-msg error">Could not run: {{ st.db.error }}</p>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    {% if st.parse_tree %}
+                    <h3 class="subsection-title">Parse tree (structure)</h3>
+                    <div class="parse-tree-wrap">
+                        <ul class="parse-tree parse-tree-root">
+                            {{ draw_tree(st.parse_tree) }}
+                        </ul>
+                    </div>
+                    <h3 class="subsection-title">Parse tree (ASCII)</h3>
+                    <pre class="parse-tree-ascii">{{ st.parse_tree_text }}</pre>
+                    {% endif %}
+
+                    {% if st.tokens %}
+                    <h3 class="subsection-title">Tokens</h3>
+                    <div class="table-wrapper">
+                        <table>
+                            <tr>
+                                <th>Token type</th>
+                                <th>Value</th>
+                            </tr>
+                            {% for token in st.tokens %}
+                            <tr>
+                                <td>{{ token[0] }}</td>
+                                <td>{{ token[1] }}</td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                    </div>
+                    {% endif %}
+
+                    {% if st.injection and st.injection.findings %}
+                    <h3 class="subsection-title">Statement-level injection notes</h3>
+                    <ul class="injection-list small">
+                        {% for f in st.injection.findings %}
+                        <li>
+                            <span class="inj-risk inj-{{ f.risk }}">{{ f.risk }}</span>
+                            <span class="inj-msg">{{ f.message }}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </div>
+                {% endfor %}
+                {% endif %}
+
+            </div>
+
+            <div class="right-panel">
+                <div class="card history-card">
+                    <div class="history-header">
+                        <h2>📜 Recent queries</h2>
+                        <span class="history-badge">Last 5</span>
+                    </div>
+
+                    {% if history %}
+                        <div class="history-list">
+                            {% for item in history %}
+                                <div class="history-item" onclick="fillQuery(`{{ item.query | replace('`', '\\`') }}`)">
+                                    <div class="history-query">{{ item.query }}</div>
+                                    <div class="history-status {% if item.status == 'Valid' %}valid-status{% else %}error-status{% endif %}">
+                                        {{ item.status }}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    {% else %}
+                        <p class="empty-history">No recent queries yet.</p>
+                    {% endif %}
+                </div>
+
+                <div class="card help-card">
+                    <h2>ℹ Schema (demo)</h2>
+                    <p class="help-text">Tables: <code>students</code> (id, name, age, course_id), <code>courses</code> (id, title), <code>teachers</code> (id, name, subject).</p>
+                    <p class="help-text db-path-line"><strong>SQLite file:</strong><br><code class="db-path">{{ db_file_path }}</code></p>
+                    <p class="help-text">Open that path in <a href="https://sqlitebrowser.org/" target="_blank" rel="noopener">DB Browser for SQLite</a>, a VS Code SQLite extension, or run <code>sqlite3 "{{ db_file_path }}"</code> in a terminal. Delete the file to recreate empty tables + seed on next request.</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        function fillQuery(queryText) {
+            document.getElementById("query").value = queryText;
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+
+        function clearEditor() {
+            document.getElementById("query").value = "";
+        }
+
+        document.getElementById("queryForm").addEventListener("submit", function () {
+            document.getElementById("loadingBox").style.display = "flex";
+        });
+    </script>
+
+</body>
+</html>
